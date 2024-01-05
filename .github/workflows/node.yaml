@@ -1,0 +1,121 @@
+name: Requirements Node backend
+
+on:
+  workflow_call:
+    inputs:
+      workdir:
+        description: "The directory of the lambda function"
+        default: './'
+        required: false
+        type: string
+      path-environments-variables: 
+        description: "Path of the three environment variables files"
+        required: false
+        type: string
+      environment: 
+        description: "Environment deploy"
+        required: false
+        type: string
+      node-version:
+        default: '14.x'
+        description: "Version for node"
+        required: false
+        type: string
+      organization:
+        description: 'SonarCloud organization'
+        required: false
+        default: 'davivienda-colombia'
+        type: string
+      coverage-file:
+        description: 'Override the default value for coverage file if the default is not the right one'
+        required: false
+        type: string
+      sonar-project-properties-file:
+        description: 'Override the default value for coverage file if the default is not the right on'
+        required: false
+        type: string
+      build-command:
+        default: 'npm ci'
+        required: false
+        type: string
+      test-command:
+        default: 'npm run test:only && npm run coverage && npm run coverage:report'
+        required: false
+        type: string
+
+jobs:
+
+  environment-files-changed:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+    outputs:
+      only-update-variables: ${{steps.Files-Changed.outputs.only-update-variables}}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Checkout davivienda-colombia/davi-coe-action-files-changed-analyze-pipeline
+        uses: actions/checkout@v3
+        with:
+          repository: davivienda-colombia/davi-coe-action-files-changed-analyze-pipeline
+          ref: 'v1.1.2'
+          token: ${{ secrets.DAVI_READER_GITHUB_ACCESS_TOKEN }}
+          persist-credentials: false
+          path: ./.github/actions/davi-coe-action-files-changed-analyze-pipeline
+      - name: Files Changed
+        id: Files-Changed
+        uses: ./.github/actions/davi-coe-action-files-changed-analyze-pipeline
+        with:
+          path-environments-variables: ${{ inputs.path-environments-variables }}
+
+  build-test-sonar:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+    environment: ${{ inputs.environment }}
+    if: fromJSON(needs.environment-files-changed.outputs.only-update-variables) == 'false'
+    permissions:
+      id-token: write
+      contents: read
+    needs:
+      - environment-files-changed
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run command
+        run: ls && pwd
+      - name: Use Node.js
+        uses: actions/setup-node@v3.5.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install Dependencies
+        run: ${{ inputs.build-command }}
+      - name: Running Linter
+        run: npm run lint
+      - name: Running Test
+        run: |
+          ${{ inputs.test-command }}
+      - name: Sonar Action
+        uses: actions/checkout@v3
+        with:
+          repository: davivienda-colombia/davi-coe-sonarcloud-pipeline
+          ref: 'v1.0.0'
+          token: ${{ secrets.DAVI_READER_GITHUB_ACCESS_TOKEN }}
+          persist-credentials: false
+          path: ./.github/actions/davi-coe-sonarcloud-pipeline
+      - name: SonarCloud Scanner
+        continue-on-error: true
+        uses: ./.github/actions/davi-coe-sonarcloud-pipeline
+        with:
+          access-token: ${{ secrets.SONAR_CLOUD_TOKEN }}
+          project-name: ${{ github.event.repository.name }}
+          project-key: ${{ github.event.repository.name }}
+          organization: ${{ inputs.organization }}
+          current-branch: ${{ github.event.pull_request.base.ref }}
+          language: 'javascript'
+          coverage-file: ${{ inputs.coverage-file }}
+          sonar-project-properties-file: ${{ inputs.sonar-project-properties-file }} 
